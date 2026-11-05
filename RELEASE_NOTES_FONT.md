@@ -2,6 +2,8 @@
 - Termius {{VERSION}} 汉化+自定义字体包，下载后请重命名为`app.asar`进行替换。
     - `app-*-localize-font.asar`: 汉化+自定义字体，自己有会员资格请下载此版本，当然，普通用户也可下载。
 - 内置字体：CodeNewRoman Nerd Font Mono（英文等宽，Nerd Font 图标）+ Resource Han Rounded CN（中文，思源圆体简体），均为 SIL OFL 开源协议。
+- 每个平台同时提供 `SHA256SUMS-<platform>.txt`，下载后可在 asar 同目录执行 `sha256sum -c` 校验。
+- 字体许可：`fonts/NOTICE.md` 与 `fonts/OFL-1.1.txt` 会随字体一起打包进 asar。
 ## 注意
 - 该汉化包仅适用于本地学习和测试，**并不能保证所有设备可用**。
 - 使用汉化包可能会影响 Termius 软件的正常使用和更新。

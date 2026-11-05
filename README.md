@@ -47,8 +47,20 @@ python fontlang.py --localize
 # 仅激活试用功能
 python lang.py --trial
 
-# 还原到初始状态
+# 还原到初始状态（需要 asar CLI）
 python lang.py --restore
+
+# 仅还原 app.asar（不依赖 asar CLI，适合 asar 未安装时回滚）
+python tools/restore.py
+
+# 打补丁前只读体检（不修改 Termius，结果写入 extract/rule-report.txt）
+python tools/report_rules.py
+
+# 查看当前安装状态（版本/是否已打补丁/备份/字体/最近报告）
+python tools/status.py
+
+# 打补丁后自检（asar 可读/版本一致/字体与许可已打包/CSS 标记存在）
+python tools/verify_asar.py
 
 # 搜索特定字符串
 python lang.py --find "term1" "term2"
@@ -73,6 +85,10 @@ python lang.py --extract
 
 > **自定义字体**：`fontlang.py` 用法与 `lang.py` 完全一致，运行时若存在 `fonts/` 目录则自动注入字体（默认终端字体改为 CodeNewRoman Nerd Font Mono，字体列表追加 CodeNewRoman + Resource Han Rounded CN）；不需要字体的构建直接使用 `lang.py`。
 
+> **字体许可**：`fonts/` 内字体均为 SIL OFL 1.1。`fonts/NOTICE.md` 记录版权与来源，`fonts/OFL-1.1.txt` 是完整许可文本；`fontlang.py` 会把两者一起复制进 `ui-process/assets/`，随 asar 分发。
+
+> **关于 `installer/`**：该目录来自上游，脚本内的仓库地址指向上游，安装的是**不含字体**的版本。需要字体请使用 `fontlang.py` 或本仓库 Releases 中的 `*-font.asar`。
+
 ## 📂 相关文件结构
 
 ```markdown
@@ -87,10 +103,20 @@ fonts/
 ├── CodeNewRomanNerdFontMono-Bold.otf
 ├── CodeNewRomanNerdFontMono-Italic.otf
 ├── ResourceHanRoundedCN-Regular.ttf       # 中文字体（思源圆体简体）
-└── fonts.css                               # @font-face 注入模板
+├── fonts.css                               # @font-face 注入模板
+├── NOTICE.md                               # 字体版权与来源
+└── OFL-1.1.txt                             # SIL OFL 1.1 许可全文
+tools/
+├── lint_rules.py   # 规则静态检查（格式/正则/顺序不变式）
+├── report_rules.py # 打补丁前只读体检（不修改 Termius）
+├── status.py       # 当前安装/补丁/备份/字体状态
+├── verify_asar.py  # 打补丁后自检（版本/字体/许可/CSS）
+└── restore.py      # 仅还原 app.asar（不依赖 asar CLI）
+tests/              # pytest 测试
 extract/
-├── app.asar.unpack # 解包出的所有文件
-└── allstring.txt   # 所有可能的字符串
+├── app.asar.unpack      # 解包出的所有文件
+├── allstring.txt        # 所有可能的字符串
+└── unmatched-rules.txt  # 本次未命中的规则（每次补丁后生成）
 ```
 
 ### 🎨 自定义字体说明
@@ -135,11 +161,42 @@ extract/
     </details>
 
 4. 如果你不想自动更新，请删除 `app-update.yml` 文件。
+   - 每个平台的 Release 同时提供 `SHA256SUMS-<platform>.txt`，下载后在 asar 同目录执行 `sha256sum -c SHA256SUMS-<platform>.txt` 即可校验。
 5. 最后，如果没有想要的版本，可在 [Fork][fork] 本项目后前往仓库的 **Settings > Secrets and variables > Actions > Variables** 页面定义变量:
   - **Name**: `RELEASE_LIST`
   - **Value**: `l`
   - 默认只发布 `app-*-localize-font.asar`（汉化+自定义字体）；如需其他变体可将值改为 `lt`（加试用）、`lk`（加跳过登录）或多组逗号分隔如 `l,lk,lt`（l=汉化，t=试用，k=跳过登录，所有产物均自动带字体）。
   - **注意**：本仓库的字体版发布由 `release-font.yml` 每日定时构建；若启用了上游的 `Release Platforms` / `Release Beta Platforms` workflow，它们会构建不含字体的版本并占用相同版本号，请在仓库的 **Actions** 页面将其禁用，只保留 `Release Font Platforms`。
+
+## 🧪 开发与测试
+
+规则是本项目的主体，修改 `rules/*.txt` 后请先跑静态检查和测试：
+
+```bash
+pip install -r requirements-dev.txt
+python tools/lint_rules.py rules
+python -m pytest -q
+```
+
+`lint_rules.py` 会检查：
+
+- 规则格式、正则编译、空替换、重复项；
+- **顺序不变式**：同一文件里，宽规则必须排在窄规则之后，否则窄规则永远不会命中；
+- 跨文件遮蔽只告警（是否同时加载取决于 `-t/-k/-s` 组合）。
+
+CI 在 push / PR 时自动执行同样的检查。
+
+如果本机有 `make`，也可以用快捷入口：
+
+```bash
+make doctor   # 状态 + 自检 + lint + 测试
+make status   # 查看当前安装/补丁状态
+make report   # 只读体检当前 Termius
+make verify   # 打补丁后自检
+make patch    # 汉化 + 字体
+make check    # lint + pytest
+make restore  # 还原 app.asar
+```
 
 ## 📱 关于安卓版
 
@@ -186,6 +243,8 @@ extract/
 ### Q1: ModuleNotFoundError: No module named 'tkinter'
 
 **Q：** Python 缺少 tkinter 图形界面库。
+
+> 现在只有需要弹出目录选择框时才依赖 tkinter；`tools/status.py`、`tools/report_rules.py`、`tools/verify_asar.py` 和 `tools/restore.py` 配合 `--path` 可以在无 tkinter 环境使用。
 
 **A：**
 
@@ -253,6 +312,18 @@ extract/
 **A：**
 
 - 这是因为使用了与版本不匹配的 asar 导致的，请确保使用了对应版本的 asar，同时**正式版与 Beta 版的 asar 不可混用**
+
+## 🛠️ 维护说明
+
+- `README.md` 由本 fork 维护；`sync-upstream.yml` 合并上游时若 README 冲突，会保留本仓库版本，其它文件冲突则直接失败并中止合并。
+- `installer/` 是上游原样文件，脚本内的仓库地址指向上游，安装的是不含字体的版本。
+- `lang.py` 有一处 fork 小改动：`tkinter` 改为在 `select_directory()` 内按需导入，便于无 GUI 环境使用 report/restore；上游若改到这段，同步会以冲突形式提示。
+- 规则修改后请运行 `python tools/lint_rules.py rules && python -m pytest -q`，CI 也会在 push/PR 时执行。
+- Termius 升级后，先运行 `python tools/report_rules.py` 做只读体检（不修改 Termius），再决定是否打补丁；补丁后未命中的规则也会写到 `extract/unmatched-rules.txt`。
+- 不确定当前是否已打补丁时，先运行 `python tools/status.py`；`--json` 可输出机器可读结果。
+- 打补丁后运行 `python tools/verify_asar.py`；`--strict` 会把备份缺失、CSS 标记缺失等 warning 也视为失败。
+- Termius 自动更新后，脚本会优先比较 `app.asar` 与备份内 `package.json` 的版本号：版本不同会自动刷新备份，旧备份保留为 `app.asar.bak.old`。读不到版本时才退回 `app.asar.bak.json` 的 hash/元数据判断。
+- `app.asar.bak.json` 只由 `fontlang.py` 维护；如果交替使用 `lang.py` 和 `fontlang.py`，切换前先运行 `python tools/restore.py`，避免元数据与实际产物不一致。
 
 ## 🔔 注意事项
 

@@ -2,9 +2,11 @@ name: Sync Upstream
 
 # 每日 00:00 UTC 自动合并上游 ArcSurge/Termius-Pro-zh_CN 的 main 分支。
 # 早于 release-font.yml（00:30 UTC）运行，当天构建即包含上游最新改动。
-# 本仓库所有上游文件保持原版（定制全部在独立新文件中），合并理论上零冲突；
-# 若上游大幅改写 README 等少数文件导致冲突，本 workflow 会直接失败（红色）提醒
-# 手动处理，绝不会带着冲突强行推送。不需要时在 Actions 页面禁用即可。
+#
+# 冲突策略：
+#   - README.md 由本 fork 维护（含字体/发布说明），冲突时保留本仓库版本；
+#   - 其它文件出现冲突时直接失败（红色）并中止合并，绝不带着未解决冲突推送。
+# 这样既保留上游规则/代码的自动更新，又不会静默覆盖 fork 的落地页。
 
 on:
   schedule:
@@ -29,10 +31,19 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: python -m pip install -r requirements-dev.txt
+
       - name: Merge upstream main
         run: |
-          set -e
-          git remote add upstream https://github.com/ArcSurge/Termius-Pro-zh_CN.git
+          set -euo pipefail
+          git remote add upstream https://github.com/ArcSurge/Termius-Pro-zh_CN.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/ArcSurge/Termius-Pro-zh_CN.git
           git fetch upstream main
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -43,6 +54,32 @@ jobs:
           fi
 
           echo "⇣ New upstream commits found, merging..."
-          git merge upstream/main --no-edit
+          if git merge upstream/main --no-edit; then
+            echo "✓ Merged cleanly"
+          else
+            conflicts=$(git diff --name-only --diff-filter=U || true)
+            if [ "$conflicts" != "README.md" ]; then
+              echo "::error::Unexpected merge conflicts (only README.md may be auto-resolved):"
+              echo "${conflicts:-<none>}"
+              git merge --abort || true
+              exit 1
+            fi
+            echo "::warning::README.md conflicts with upstream; keeping the fork version."
+            git checkout --ours -- README.md
+            git add README.md
+            git commit --no-edit
+            {
+              echo "### Upstream sync"
+              echo "- README.md: kept fork version"
+              echo "- merge commit: $(git rev-parse --short HEAD)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "Validating merged rules before push..."
+          python tools/lint_rules.py rules \
+            || { echo "::error::Merged rules failed lint; not pushing"; exit 1; }
+          python -m pytest -q \
+            || { echo "::error::Merged rules failed tests; not pushing"; exit 1; }
+
           git push origin main
           echo "✓ Pushed merge commit to origin/main"

@@ -11,8 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
-import tkinter as tk
-from tkinter import filedialog
+
 from logger import setup_logging
 
 
@@ -300,7 +299,14 @@ def resolve_resources_dir(path, max_depth=3):
 
 
 def select_directory(title):
-    """弹出文件夹选择对话框"""
+    """弹出文件夹选择对话框（仅在需要时导入 tkinter，便于无 GUI 环境使用其它模式）"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        logging.error(f"tkinter is required for the directory picker: {exc}")
+        logging.error("Install python3-tk, or make sure Termius is at the default install location.")
+        sys.exit(1)
     try:
         root = tk.Tk()
         root.withdraw()
