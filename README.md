@@ -166,7 +166,7 @@ extract/
   - **Name**: `RELEASE_LIST`
   - **Value**: `l`
   - 默认只发布 `app-*-localize-font.asar`（汉化+自定义字体）；如需其他变体可将值改为 `lt`（加试用）、`lk`（加跳过登录）或多组逗号分隔如 `l,lk,lt`（l=汉化，t=试用，k=跳过登录，所有产物均自动带字体）。
-  - **注意**：本仓库的字体版发布由 `release-font.yml` 每日定时构建；若启用了上游的 `Release Platforms` / `Release Beta Platforms` workflow，它们会构建不含字体的版本并占用相同版本号，请在仓库的 **Actions** 页面将其禁用，只保留 `Release Font Platforms`。
+  - **注意**：本仓库的字体版发布由 `release-font.yml` 手动触发（Actions → Release Font Platforms → Run workflow）；若启用了上游的 `Release Platforms` / `Release Beta Platforms` workflow，它们会构建不含字体的版本并占用相同版本号，请在仓库的 **Actions** 页面将其禁用，只保留 `Release Font Platforms`。
 
 ## 🧪 开发与测试
 
@@ -201,7 +201,7 @@ make restore  # 还原 app.asar
 ## 📱 关于安卓版
 
 - 目前只有汉化功能，暂无其他功能。并且部分词条在源码中，暂未汉化。
-- 由于手机端和桌面端版本号不同，因此安卓版本不会发布在 `Releases` 中，而是暂时托管在 [Actions][localize-android]。[Actions][localize-android] 每天运行一次，请自行查找对应版本进行下载。注意，这个是需要**登录**才可以下载的。
+- 由于手机端和桌面端版本号不同，因此安卓版本不会发布在 `Releases` 中，而是暂时托管在 [Actions][localize-android]。本 fork 已禁用该定时任务；如需 Android 汉化，可在 Actions 页面手动运行 `Localize Android`。注意，这个是需要**登录**才可以下载的。
 - 若你计划 [Fork][fork] 此项目，请在 [Fork][fork] 后前往仓库的 **Settings > Secrets and variables > Actions > Secrets** 页面，点击 <kbd>New repository secret</kbd> 定义私密变量。
   - **Name**: `APK_SIGN_PROPERTIES`
   - **Value**: 填写 [apk.sign.properties.example](android/apk.sign.properties.example) 文件内容（请根据需要修改文件内容）

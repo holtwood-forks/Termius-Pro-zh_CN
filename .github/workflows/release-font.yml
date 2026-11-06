@@ -1,8 +1,7 @@
 name: Release Font Platforms
 
+# 手动触发：Actions -> Release Font Platforms -> Run workflow。
 on:
-  schedule:
-    - cron: '30 0 * * *'
   workflow_dispatch:
     inputs:
       force_release:
@@ -15,7 +14,7 @@ on:
 permissions:
   contents: write
 
-# 同一时刻只允许一个发布流程，避免定时触发与手动触发并发写同一份草稿 Release
+# 同一时刻只允许一个发布流程，避免多次手动触发并发写同一份草稿 Release
 concurrency:
   group: release-font
   cancel-in-progress: false

@@ -1,17 +1,15 @@
 name: Sync Upstream
 
-# 每日 00:00 UTC 自动合并上游 ArcSurge/Termius-Pro-zh_CN 的 main 分支。
-# 早于 release-font.yml（00:30 UTC）运行，当天构建即包含上游最新改动。
+# 手动触发：Actions -> Sync Upstream -> Run workflow。
+# 合并上游 ArcSurge/Termius-Pro-zh_CN 的 main 分支；是否跟进由维护者决定。
 #
 # 冲突策略：
 #   - README.md 由本 fork 维护（含字体/发布说明），冲突时保留本仓库版本；
 #   - .gitignore 冲突时合并双方条目，保留 fork 与上游各自新增的忽略项；
 #   - 其它文件出现冲突时直接失败（红色）并中止合并，绝不带着未解决冲突推送。
-# 这样既保留上游规则/代码的自动更新，又不会静默覆盖 fork 的落地页。
+# 这样既保留上游规则/代码的更新能力，又不会静默覆盖 fork 的落地页。
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
