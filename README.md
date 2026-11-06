@@ -315,7 +315,7 @@ make restore  # 还原 app.asar
 
 ## 🛠️ 维护说明
 
-- `README.md` 由本 fork 维护；`sync-upstream.yml` 合并上游时若 README 冲突，会保留本仓库版本，其它文件冲突则直接失败并中止合并。
+- `README.md` 由本 fork 维护；`sync-upstream.yml` 合并上游时若 README 冲突，会保留本仓库版本；`.gitignore` 冲突会合并双方条目；其它文件冲突则直接失败并中止合并。
 - `installer/` 是上游原样文件，脚本内的仓库地址指向上游，安装的是不含字体的版本。
 - `lang.py` 有一处 fork 小改动：`tkinter` 改为在 `select_directory()` 内按需导入，便于无 GUI 环境使用 report/restore；上游若改到这段，同步会以冲突形式提示。
 - 规则修改后请运行 `python tools/lint_rules.py rules && python -m pytest -q`，CI 也会在 push/PR 时执行。

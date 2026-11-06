@@ -5,6 +5,7 @@ name: Sync Upstream
 #
 # 冲突策略：
 #   - README.md 由本 fork 维护（含字体/发布说明），冲突时保留本仓库版本；
+#   - .gitignore 冲突时合并双方条目，保留 fork 与上游各自新增的忽略项；
 #   - 其它文件出现冲突时直接失败（红色）并中止合并，绝不带着未解决冲突推送。
 # 这样既保留上游规则/代码的自动更新，又不会静默覆盖 fork 的落地页。
 
@@ -47,6 +48,7 @@ jobs:
           git fetch upstream main
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config rerere.enabled false
 
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "✓ Already up to date with upstream/main"
@@ -58,19 +60,49 @@ jobs:
             echo "✓ Merged cleanly"
           else
             conflicts=$(git diff --name-only --diff-filter=U || true)
-            if [ "$conflicts" != "README.md" ]; then
-              echo "::error::Unexpected merge conflicts (only README.md may be auto-resolved):"
-              echo "${conflicts:-<none>}"
+            unexpected=""
+            readme_resolved=false
+            gitignore_resolved=false
+
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              case "$file" in
+                README.md)
+                  echo "::warning::README.md conflicts with upstream; keeping the fork version."
+                  git checkout --ours -- README.md
+                  git add README.md
+                  readme_resolved=true
+                  ;;
+                .gitignore)
+                  echo "::warning::.gitignore conflicts with upstream; merging both sides."
+                  {
+                    git show :2:.gitignore
+                    git show :3:.gitignore
+                  } | awk '!seen[$0]++' > .gitignore
+                  git add .gitignore
+                  gitignore_resolved=true
+                  ;;
+                *)
+                  unexpected="${unexpected} ${file}"
+                  ;;
+              esac
+            done <<< "$conflicts"
+
+            if [ -n "$unexpected" ]; then
+              echo "::error::Unexpected merge conflicts (only README.md and .gitignore may be auto-resolved):${unexpected}"
               git merge --abort || true
               exit 1
             fi
-            echo "::warning::README.md conflicts with upstream; keeping the fork version."
-            git checkout --ours -- README.md
-            git add README.md
+
             git commit --no-edit
             {
               echo "### Upstream sync"
-              echo "- README.md: kept fork version"
+              if [ "$readme_resolved" = true ]; then
+                echo "- README.md: kept fork version"
+              fi
+              if [ "$gitignore_resolved" = true ]; then
+                echo "- .gitignore: merged fork and upstream entries"
+              fi
               echo "- merge commit: $(git rev-parse --short HEAD)"
             } >> "$GITHUB_STEP_SUMMARY"
           fi

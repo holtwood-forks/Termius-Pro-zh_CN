@@ -18,3 +18,4 @@ debug.js
 extract/
 .pytest_cache/
 .venv/
+installer/TermiusZh.conf
