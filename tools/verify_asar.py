@@ -57,7 +57,7 @@ def check(name, status, detail):
     return {"name": name, "status": status, "detail": detail}
 
 
-def verify(termius_path, modifier, listing, fonts_dir=None, css_reader=None, report=None):
+def verify(termius_path, modifier, listing, fonts_dir=None, css_reader=None, report=None, check_fonts=True):
     asar_path = os.path.join(termius_path, "app.asar")
     backup_path = asar_path + ".bak"
     result = {"version": None, "backup_version": None, "checks": []}
@@ -111,38 +111,53 @@ def verify(termius_path, modifier, listing, fonts_dir=None, css_reader=None, rep
     else:
         checks.append(check("meta_matches_asar", "warn", "app.asar.bak.json missing"))
 
-    fonts_dir = fonts_dir or os.path.join(ROOT, "fonts")
-    if os.path.isdir(fonts_dir):
-        expected = [
-            name for name in os.listdir(fonts_dir)
-            if name.lower().endswith((".ttf", ".otf", ".woff2"))
-        ]
-        expected += [name for name in ("OFL-1.1.txt", "NOTICE.md")
-                     if os.path.isfile(os.path.join(fonts_dir, name))]
-        missing = [name for name in expected if name not in listing]
-        if missing:
-            checks.append(check("fonts_packed", "fail", "missing: " + ", ".join(missing)))
-        else:
-            checks.append(check("fonts_packed", "ok", f"{len(expected)} files"))
+    if not check_fonts:
+        checks.append(check("fonts_packed", "skip", "--no-fonts"))
+        checks.append(check("css_marker", "skip", "--no-fonts"))
     else:
-        checks.append(check("fonts_packed", "skip", "fonts/ not found"))
+        fonts_dir = fonts_dir or os.path.join(ROOT, "fonts")
+        if os.path.isdir(fonts_dir):
+            font_files = [
+                name for name in os.listdir(fonts_dir)
+                if name.lower().endswith((".ttf", ".otf", ".woff2"))
+            ]
+            expected = list(font_files)
+            expected += [name for name in ("OFL-1.1.txt", "NOTICE.md")
+                         if os.path.isfile(os.path.join(fonts_dir, name))]
+            missing = [name for name in expected if name not in listing]
+            if not font_files:
+                checks.append(check("fonts_packed", "fail", "no font files under fonts/"))
+            elif missing:
+                checks.append(check("fonts_packed", "fail", "missing: " + ", ".join(missing)))
+            else:
+                checks.append(check("fonts_packed", "ok", f"{len(expected)} files"))
+        else:
+            checks.append(check("fonts_packed", "skip", "fonts/ not found"))
 
-    css_lines = [
-        line.lstrip("/") for line in listing.splitlines()
-        if re.search(r"ui-process/assets/main-[^/]+\.css$", line)
-    ]
-    if not css_lines:
-        checks.append(check("css_marker", "warn", "ui-process/assets/main-*.css not found"))
-    elif css_reader is None:
-        checks.append(check("css_marker", "warn", "css reader not available"))
-    else:
-        content = css_reader(asar_path, css_lines[0])
-        if content is None:
-            checks.append(check("css_marker", "warn", f"cannot extract {css_lines[0]}"))
-        elif "CodeNewRoman Nerd Font Mono" in content:
-            checks.append(check("css_marker", "ok", css_lines[0]))
+        css_lines = [
+            line.lstrip("/") for line in listing.splitlines()
+            if re.search(r"ui-process/assets/main-[^/]+\.css$", line)
+        ]
+        if not css_lines:
+            checks.append(check("css_marker", "warn", "ui-process/assets/main-*.css not found"))
+        elif css_reader is None:
+            checks.append(check("css_marker", "warn", "css reader not available"))
         else:
-            checks.append(check("css_marker", "fail", f"font marker missing in {css_lines[0]}"))
+            # 不同版本的资源哈希不同，main-*.css 可能不止一个；任意一个带标记即可。
+            marker = "CodeNewRoman Nerd Font Mono"
+            matched = None
+            for css_path in css_lines:
+                content = css_reader(asar_path, css_path)
+                if content and marker in content:
+                    matched = css_path
+                    break
+            if matched:
+                checks.append(check("css_marker", "ok", matched))
+            else:
+                checks.append(check(
+                    "css_marker", "fail",
+                    "font marker missing in: " + ", ".join(css_lines),
+                ))
 
     if report is None:
         report = read_report(
@@ -183,6 +198,8 @@ def main(argv=None):
     parser.add_argument("-p", "--path", help="Termius resources directory (contains app.asar).")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     parser.add_argument("--strict", action="store_true", help="Exit 1 on warnings as well as failures.")
+    parser.add_argument("--no-fonts", action="store_true",
+                        help="Skip font/license/CSS checks for a non-font build.")
     parser.add_argument("-v", "--verbose", type=lambda s: s.upper(), dest="log_level",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], default="INFO")
     args = parser.parse_args(argv)
@@ -199,7 +216,10 @@ def main(argv=None):
     modifier = fontlang.FontTermiusModifier(termius_path, SimpleNamespace(beta=args.beta, style=False))
     asar_path = os.path.join(termius_path, "app.asar")
     listing = asar_listing(asar_path) if os.path.exists(asar_path) else None
-    result = verify(termius_path, modifier, listing, css_reader=asar_extract_file)
+    result = verify(
+        termius_path, modifier, listing, css_reader=asar_extract_file,
+        check_fonts=not args.no_fonts,
+    )
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

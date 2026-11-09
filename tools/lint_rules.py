@@ -13,8 +13,8 @@ import re
 import sys
 from pathlib import Path
 
-# Matches lang.TermiusModifier.load_rules order, with font.txt appended by fontlang.py.
-LOAD_ORDER = ("skip_login.txt", "trial.txt", "style.txt", "localize.txt", "font.txt")
+# Matches runtime order: fontlang.py prepends font.txt before feature rules.
+LOAD_ORDER = ("font.txt", "skip_login.txt", "trial.txt", "style.txt", "localize.txt")
 MIN_SHADOW_LENGTH = 4
 
 

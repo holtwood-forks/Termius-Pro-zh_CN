@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 
+from backup_guard import BackupGuardMixin
 from logger import setup_logging
 
 
@@ -361,7 +362,7 @@ def check_asar_installed():
     run_command([get_asar_cmd(), "--version"])
 
 
-class TermiusModifier:
+class TermiusModifier(BackupGuardMixin):
     @property
     def _script_dir(self):
         return os.path.dirname(os.path.abspath(__file__))
@@ -406,12 +407,8 @@ class TermiusModifier:
         self.loaded_rules = []
         self.compiled_rules = []
         self.applied_rules = set()
-
-    def create_backup(self):
-        """创建初始备份（仅在备份不存在时）"""
-        if not os.path.exists(self._backup_path):
-            shutil.copy(self._original_path, self._backup_path)
-            logging.info("Initial backup created")
+        self.files_scanned = 0
+        self.patch_errors = []
 
     def restore_backup(self):
         """从备份文件恢复原始 app.asar"""
@@ -419,7 +416,7 @@ class TermiusModifier:
             logging.info("Backup file not found, skipping restore")
             return
 
-        shutil.copy(self._backup_path, self._original_path)
+        self._copy_file_atomic(self._backup_path, self._original_path)
         logging.info("Restored from backup successfully")
 
     def clean_workspace(self):
@@ -428,17 +425,6 @@ class TermiusModifier:
         if os.path.exists(self._app_dir):
             safe_rmtree(self._app_dir)
             logging.debug("Cleaned app directory")
-
-    def manage_workspace(self):
-        """管理工作区：创建备份并清理临时文件"""
-        self.create_backup()
-        self.clean_workspace()
-
-    def restore_changes(self):
-        """完全还原：清理工作区并删除备份文件"""
-        self.clean_workspace()
-        if os.path.exists(self._backup_path):
-            os.remove(self._backup_path)
 
     def _find_fuse_executable(self):
         """定位包含熔丝表的可执行文件"""
@@ -504,7 +490,13 @@ class TermiusModifier:
                 "(run as administrator on Windows, or use sudo on Linux/macOS)."
             )
             sys.exit(1)
-        # 只改 1 字节，用局部补丁避免整块读写可执行文件
+        # 先记录原始 fuse 状态，确保还原时能恢复；再只改 1 字节
+        fuse_meta = {
+            "path": os.path.abspath(exe_path),
+            "offset": offset,
+            "original": state,
+        }
+        self._write_backup_meta(fuse=fuse_meta)
         try:
             write_file_atomic(exe_path, offsets={offset: bytes([FUSE_OFF])})
         except OSError as e:
@@ -513,6 +505,8 @@ class TermiusModifier:
                 "and you have write access to the Termius directory."
             )
             sys.exit(1)
+        fuse_meta["executable_sha256"] = self._file_sha256(exe_path)
+        self._write_backup_meta(fuse=fuse_meta)
         logging.info("Asar integrity validation disabled (EnableEmbeddedAsarIntegrityValidation)")
 
     def decompress_asar(self):
@@ -521,9 +515,32 @@ class TermiusModifier:
         run_command(cmd)
 
     def pack_to_asar(self):
-        """将修改后的 app 目录打包回 app.asar"""
-        cmd = [get_asar_cmd(), "pack", self._app_dir, self._original_path, "--unpack-dir", "{node_modules/@termius,out}"]
-        run_command(cmd)
+        """将修改后的 app 目录打包回 app.asar
+
+        先打包到同目录临时文件，成功后再原子替换，避免 asar pack 中途失败
+        把现有的 app.asar 写坏。
+        """
+        temp_path = self._original_path + ".new"
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        try:
+            cmd = [
+                get_asar_cmd(), "pack", self._app_dir, temp_path,
+                "--unpack-dir", "{node_modules/@termius,out}",
+            ]
+            run_command(cmd)
+            try:
+                os.replace(temp_path, self._original_path)
+            except OSError as e:
+                logging.error(
+                    f"Failed to replace app.asar: {e}. Make sure Termius is fully closed "
+                    "and you have write access to the resources directory."
+                )
+                sys.exit(1)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        self._record_patch_metadata()
 
     def copy_unpacked_files(self):
         """复制解包文件到 extract 目录并提取字符串"""
@@ -695,21 +712,56 @@ class TermiusModifier:
         return file_content, matched_rules
 
     def replace_rules(self):
-        """对所有代码文件应用规则替换"""
+        """对所有代码文件应用规则替换，并记录扫描/失败情况"""
         logging.info("Starting rule replacement...")
+        self.patch_errors = []
+        self.files_scanned = 0
+        self.applied_rules = set()
         code_files = self.collect_code_files()
         for file_path in code_files:
             if not os.path.exists(file_path):
+                self.patch_errors.append((file_path, "file disappeared before patching"))
                 continue
             try:
                 content = read_file(file_path, strip_empty=False)
+                self.files_scanned += 1
                 new_content, matched_rules = self.replace_content(content)
                 self.applied_rules.update(matched_rules)
                 if matched_rules:
                     write_file_atomic(file_path, new_content)
             except Exception as e:
+                self.patch_errors.append((file_path, str(e)))
                 logging.error(f"Failed to process file {file_path}: {e}")
-        logging.info("Rule replacement completed")
+        logging.info(
+            f"Rule replacement completed: {self.files_scanned} file(s) scanned, "
+            f"{len(self.applied_rules)} rule(s) matched, {len(self.patch_errors)} error(s)"
+        )
+
+    def _validate_patch_result(self):
+        """打包前确认补丁确实命中了文件/规则，避免发布未汉化 asar"""
+        total_rules = len(self.compiled_rules)
+        if self.files_scanned == 0:
+            logging.error(
+                "No code files were found under background-process/assets, "
+                "ui-process/assets or main-process; refusing to pack an unpatched app.asar"
+            )
+            return False
+        if self.patch_errors:
+            logging.error(f"{len(self.patch_errors)} file(s) failed during patching:")
+            for path, error in self.patch_errors:
+                logging.error(f"  {path}: {error}")
+            logging.error("Refusing to pack a partially patched app.asar")
+            return False
+        if not total_rules:
+            logging.error("No rules were loaded; refusing to pack an unpatched app.asar")
+            return False
+        if not self.applied_rules:
+            logging.error(
+                f"0/{total_rules} rules matched; refusing to pack an unpatched app.asar"
+            )
+            return False
+        logging.info(f"Rules applied: {len(self.applied_rules)}/{total_rules}")
+        return True
 
     def apply_macos_fix(self):
         """应用 macOS 系统修复（重新计算文件 hash）"""
@@ -729,10 +781,14 @@ class TermiusModifier:
         """
         start_time = time.monotonic()
         self.manage_workspace()
-        self.disable_asar_integrity_validation()
         self.decompress_asar()
         self.load_rules()
         self.replace_rules()
+        if not self._validate_patch_result():
+            self.clean_workspace()
+            logging.error("Patch aborted; app.asar was not replaced")
+            raise SystemExit(1)
+        self.disable_asar_integrity_validation()
         self.pack_to_asar()
         if is_macos():
             self.apply_macos_fix()
@@ -812,6 +868,8 @@ def main():
     parser.add_argument("-e", "--extract", action="store_true", help="Unpack and extract application strings.")
     parser.add_argument("-f", "--find", nargs="+", help="Multi-mode search operation.")
     parser.add_argument("-r", "--restore", action="store_true", help="Restore software to initial state.")
+    parser.add_argument("--force", action="store_true",
+                        help="Force restore even if the backup looks stale (use with care).")
     parser.add_argument("-v", "--verbose", type=lambda s: s.upper(), dest='log_level',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO',
                         help="Set logging verbosity: DEBUG|INFO|WARNING|ERROR|CRITICAL (default: %(default)s)")
@@ -826,19 +884,21 @@ def main():
         args.localize = True
         logging.info("No arguments provided, defaulting to localization mode")
 
-    check_asar_installed()
     termius_path = get_termius_path(args.beta)
     modifier = TermiusModifier(termius_path, args)
 
     # 根据参数执行对应操作
     if any((args.trial, args.style, args.skip_login, args.localize)):
+        check_asar_installed()
         modifier.apply_changes()
     elif args.find:
         modifier.find_in_content()
     elif args.extract:
+        check_asar_installed()
         modifier.extract_and_unpack()
     elif args.restore:
-        modifier.restore_changes()
+        if not modifier.restore_changes(force=args.force):
+            sys.exit(1)
     else:
         logging.error("Invalid command. Use '--help' for usage information.")
 

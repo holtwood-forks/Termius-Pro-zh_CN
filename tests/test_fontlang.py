@@ -101,3 +101,16 @@ def test_font_default_rule_matches_all_three_processes():
         result = pattern.sub(replacement, sample)
         assert result.endswith('="CodeNewRoman Nerd Font Mono"')
         assert '"Source Code Pro"' not in result
+
+
+def test_font_rules_run_before_style_rules(tmp_path):
+    modifier = FontModifier("/nonexistent", "/nonexistent")
+    modifier.compiled_rules = [
+        ("plain", "CircularXX|system-ui", "CircularXX", "system-ui"),
+    ]
+
+    modifier._compile_font_rules()
+    result, _ = modifier.replace_content('fontFamily:"CircularXX, sans-serif"')
+
+    assert "'CodeNewRoman Nerd Font Mono'" in result
+    assert "system-ui" not in result

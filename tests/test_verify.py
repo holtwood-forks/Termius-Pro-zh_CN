@@ -157,3 +157,25 @@ def test_verify_rule_report_version_mismatch(tmp_path):
     )
 
     assert statuses(result)["rule_report"] == "warn"
+
+
+def test_verify_no_fonts_skips_font_checks(tmp_path):
+    modifier, listing, fonts = make_fixture(tmp_path)
+
+    result = verify(
+        str(tmp_path), modifier, listing, fonts_dir=str(fonts), check_fonts=False,
+    )
+
+    assert statuses(result)["fonts_packed"] == "skip"
+    assert statuses(result)["css_marker"] == "skip"
+
+
+def test_verify_fonts_dir_without_font_files(tmp_path):
+    modifier, listing, _ = make_fixture(tmp_path)
+    fonts = tmp_path / "empty-fonts"
+    fonts.mkdir()
+    (fonts / "OFL-1.1.txt").write_text("OFL", encoding="utf-8")
+
+    result = verify(str(tmp_path), modifier, listing, fonts_dir=str(fonts))
+
+    assert statuses(result)["fonts_packed"] == "fail"

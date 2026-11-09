@@ -102,8 +102,10 @@ def replace_file(source_path, target_path):
     if not target_exists:
         logger.warning(f"Target file does not exist, will copy directly: {target_path}")
 
+    temp_path = f"{target_path}.tmp"
     try:
-        shutil.copy2(source_path, target_path)
+        shutil.copy2(source_path, temp_path)
+        os.replace(temp_path, target_path)
         logger.info(f"File replaced successfully: {target_path}, [Source: {source_path}]")
         return True
     except PermissionError:
@@ -112,6 +114,9 @@ def replace_file(source_path, target_path):
     except Exception as e:
         logger.error(f"File replacement failed: {str(e)}")
         return False
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 def _handle_remove_readonly(func, path, _):
@@ -246,6 +251,7 @@ class CloudScraperWrapper:
         return self.request('POST', url, **kwargs)
 
     def download(self, url, save_path, chunk_size=8192, **kwargs):
+        part_path = f"{save_path}.part"
         try:
             response = self.get(url, stream=True, **kwargs)
             response.raise_for_status()
@@ -262,7 +268,7 @@ class CloudScraperWrapper:
                 leave=True
             )
 
-            with open(save_path, 'wb') as f:
+            with open(part_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size):
                     if chunk:
                         f.write(chunk)
@@ -270,12 +276,17 @@ class CloudScraperWrapper:
                         progress_bar.update(len(chunk))
 
             progress_bar.close()
+            if downloaded == 0:
+                raise Exception("Downloaded file is empty")
+            os.replace(part_path, save_path)
             self._log(f"File download completed: {save_path} ({downloaded}/{total_size} bytes)" if total_size else
                       f"File download completed: {save_path} (unknown size)")
 
             return True
 
         except Exception as e:
+            if os.path.exists(part_path):
+                os.remove(part_path)
             self._log(f"Download failed: {str(e)}", "ERROR")
             return False
 
@@ -392,7 +403,7 @@ class TermiusAPKModifier:
     def _download_apk_editor_jar(self, filename=APK_EDITOR_FILENAME):
         """Download APKEditor.jar"""
         file_path = os.path.join(self.working_dir, filename)
-        if os.path.exists(file_path):
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             logger.info(f"{filename} already exists, skipping download")
             return
 
@@ -402,10 +413,18 @@ class TermiusAPKModifier:
             response = self.scraper.get_json(api_url)
             assets = response.get('assets', [])
 
-            if not assets:
-                raise Exception("No available assets found in latest repository release.")
+            jar_assets = [
+                asset for asset in assets
+                if str(asset.get('name', '')).lower().endswith('.jar')
+            ]
+            if not jar_assets:
+                raise Exception("No .jar asset found in latest repository release.")
 
-            download_url = assets[0].get('browser_download_url')
+            asset = next(
+                (item for item in jar_assets if 'apkeditor' in str(item.get('name', '')).lower()),
+                jar_assets[0],
+            )
+            download_url = asset.get('browser_download_url')
             if not download_url:
                 raise Exception("Asset download link not found.")
 
@@ -415,11 +434,12 @@ class TermiusAPKModifier:
             logger.info(f"{filename} download completed, saved to: {file_path}")
         except Exception as e:
             logger.error(f"Error downloading {filename}: {str(e)}")
+            raise
 
     def _download_termius_apk(self, filename=APKM_FILENAME):
         """Download Termius.apk"""
         file_path = os.path.join(self.working_dir, filename)
-        if os.path.exists(file_path):
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             logger.info(f"{filename} already exists, skipping download")
             return
 
@@ -584,7 +604,8 @@ class TermiusAPKModifier:
         src_xml = os.path.join(self.working_dir, LANGUAGE_XML)
         tar_xml = os.path.join(target_dir, 'resources', 'package_1', 'res', 'values-zh-rCN', LANGUAGE_XML)
         logger.info(f"Replacing language file: Source={src_xml}, Target={tar_xml}")
-        replace_file(src_xml, tar_xml)
+        if not replace_file(src_xml, tar_xml):
+            raise Exception(f"Failed to replace {LANGUAGE_XML}: {src_xml} -> {tar_xml}")
 
     def _build_apk(self, out_dir, apk_filename):
         """Repackage APK file"""
@@ -621,10 +642,14 @@ class TermiusAPKModifier:
         termius_apk = os.path.join(self.working_dir, APKM_FILENAME)
         if not os.path.exists(termius_apk):
             self._download_termius_apk(APKM_FILENAME)
+        if not os.path.exists(termius_apk) or os.path.getsize(termius_apk) == 0:
+            raise Exception(f"{APKM_FILENAME} is missing or empty after download.")
 
         apk_editor_jar = os.path.join(self.working_dir, APK_EDITOR_FILENAME)
         if not os.path.exists(apk_editor_jar):
             self._download_apk_editor_jar(APK_EDITOR_FILENAME)
+        if not os.path.exists(apk_editor_jar) or os.path.getsize(apk_editor_jar) == 0:
+            raise Exception(f"{APK_EDITOR_FILENAME} is missing or empty after download.")
 
         sign_keystore = os.path.join(self.keystore_dir, self.sign_properties["sign.keystore"])
         if not os.path.exists(sign_keystore):

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Termius 字体注入入口（叠加层脚本）
 
-本文件是 fork 的 Python 叠加层入口，不修改上游 lang.py 的任何内容：
-通过子类化 TermiusModifier，并在运行期间临时替换 lang 模块内的类引用实现注入，
-因此上游对 lang.py 的更新可以直接合并，不会产生文本冲突。
+本文件是 fork 的 Python 字体叠加层入口：字体注入通过子类化 TermiusModifier，
+并在运行期间临时替换 lang 模块内的类引用实现，不复制上游业务逻辑。
+备份/还原安全由 lang.py 混入 backup_guard.py 提供，与 fontlang.py 共用。
 
 用法与 lang.py 完全一致（参数解析与调度复用上游 main()）：
     python fontlang.py          # 汉化 + 字体（无参数时上游默认执行汉化）
@@ -16,14 +16,10 @@
 OFL-1.1.txt 与 NOTICE.md 会随字体一起复制到 ui-process/assets，满足 OFL 的随附要求。
 """
 import glob
-import hashlib
-import json
 import logging
 import os
 import re
 import shutil
-import subprocess
-import tempfile
 
 import lang
 
@@ -41,116 +37,19 @@ class FontTermiusModifier(lang.TermiusModifier):
         return os.path.join(self._script_dir, "fonts")
 
     @property
-    def _backup_meta_path(self):
-        """备份元数据：记录上次打包产物的 hash，用于识别 Termius 自动更新"""
-        return self._backup_path + ".json"
-
-    @property
     def _report_path(self):
         """本次未命中规则报告（extract/ 已 gitignore）"""
         return os.path.join(self._script_dir, "extract", "unmatched-rules.txt")
 
-    @staticmethod
-    def _file_sha256(path):
-        digest = hashlib.sha256()
-        with open(path, "rb") as file:
-            for chunk in iter(lambda: file.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
-    def _read_backup_meta(self):
-        try:
-            with open(self._backup_meta_path, "r", encoding="utf-8") as file:
-                return json.load(file)
-        except (OSError, ValueError):
-            return {}
-
-    def _write_backup_meta(self):
-        meta = {"patched_sha256": self._file_sha256(self._original_path)}
-        lang.write_file_atomic(self._backup_meta_path, json.dumps(meta) + "\n")
-
-    def _asar_version(self, asar_path):
-        """读取 asar 内 package.json 的 version；asar CLI 不可用或文件损坏时返回 None"""
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                subprocess.run(
-                    [lang.get_asar_cmd(), "extract-file", asar_path, "package.json"],
-                    cwd=temp_dir, check=True, capture_output=True, text=True,
-                )
-                with open(os.path.join(temp_dir, "package.json"), "r", encoding="utf-8") as file:
-                    return json.load(file).get("version")
-        except (OSError, subprocess.CalledProcessError, ValueError):
-            return None
-
-    def _replace_backup(self):
-        """用当前 app.asar 刷新备份，旧备份保留为 .old（只保留第一份）"""
-        old_backup = self._backup_path + ".old"
-        if not os.path.exists(old_backup):
-            os.replace(self._backup_path, old_backup)
-            logging.warning(f"Previous backup preserved at {old_backup}")
-        else:
-            os.remove(self._backup_path)
-        shutil.copy2(self._original_path, self._backup_path)
-        if os.path.exists(self._backup_meta_path):
-            os.remove(self._backup_meta_path)
-
     def _refresh_stale_backup(self):
-        """Termius 自动更新后 app.asar 会变新，而 .bak 仍是旧版本。
-
-        直接 restore 会把旧版本打包回去，造成版本不匹配。优先比较 asar 内
-        package.json 的版本号：版本不同才刷新备份。读不到版本时退回 hash 启发式：
-        - 当前 asar 等于备份：未修改，正常；
-        - 当前 asar 等于上次打包产物：是我们自己打的包，正常；
-        - 其它情况且已有元数据：视为 Termius 已更新，刷新备份。
-        没有元数据时保持原备份不动，避免首次升级时误删唯一一份原版。
-        """
-        if not (os.path.exists(self._backup_path) and os.path.exists(self._original_path)):
-            return
-        current_version = self._asar_version(self._original_path)
-        backup_version = self._asar_version(self._backup_path)
-        if current_version and backup_version:
-            if current_version != backup_version:
-                logging.warning(
-                    f"Termius version changed ({backup_version} -> {current_version}); "
-                    "refreshing app.asar.bak"
-                )
-                self._replace_backup()
-            return
-
-        current = self._file_sha256(self._original_path)
-        backup = self._file_sha256(self._backup_path)
-        meta = self._read_backup_meta()
-        if current == backup:
-            return
-        if not meta:
-            logging.warning(
-                "app.asar differs from app.asar.bak and no backup metadata exists. "
-                "If Termius was updated, delete app.asar.bak and rerun to create a fresh backup."
-            )
-            return
-        if current == meta.get("patched_sha256"):
-            return
-        logging.warning(
-            "app.asar does not match the backup or the last patched output; "
-            "assuming Termius was updated and refreshing app.asar.bak"
-        )
-        self._replace_backup()
-
-    def manage_workspace(self):
-        """覆盖上游工作区管理：先识别 Termius 更新导致的过期备份"""
-        self._refresh_stale_backup()
-        super().manage_workspace()
+        """兼容旧调用：委托给 lang 的备份新鲜度检查"""
+        return self.ensure_backup_current()
 
     def pack_to_asar(self):
-        """打包后记录产物 hash，供下次运行识别“当前 asar 是否是自己打的包”"""
+        """打包后记录产物 hash；基类已记录时跳过重复写（兼容测试替换基类实现）"""
         super().pack_to_asar()
-        self._write_backup_meta()
-
-    def restore_changes(self):
-        """还原后一并清理备份元数据"""
-        super().restore_changes()
-        if os.path.exists(self._backup_meta_path):
-            os.remove(self._backup_meta_path)
+        if not self._read_backup_meta().get("patched_sha256"):
+            self._record_patch_metadata()
 
     def _write_unmatched_report(self):
         """把本次未命中的规则写到 extract/unmatched-rules.txt，便于 Termius 升级后排查"""
@@ -173,15 +72,18 @@ class FontTermiusModifier(lang.TermiusModifier):
         self._write_unmatched_report()
 
     def _compile_font_rules(self):
-        """读取并编译 rules/font.txt，追加到上游已编译规则列表尾部
+        """读取并编译 rules/font.txt，插到已编译规则列表最前面
 
-        编译逻辑与上游 load_rules 保持一致；若上游调整 compiled_rules 的
-        元组结构，此处需同步（CI 构建失败即提示）。
+        字体规则必须最先执行：style.txt 里的 ``CircularXX`` 宽替换会先把
+        ``fontFamily:"CircularXX, sans-serif"`` 等字体锚点改掉，字体规则若
+        追加在尾部就再也匹配不到。编译逻辑与上游 load_rules 保持一致；若上游
+        调整 compiled_rules 的元组结构，此处需同步（CI 构建失败即提示）。
         """
         rules_path = os.path.join(self._rules_dir, "font.txt")
         if not os.path.isfile(rules_path):
             logging.warning(f"Font rules not found: {rules_path}")
             return
+        font_rules = []
         try:
             for line in lang.read_file(rules_path):
                 if lang.is_comment_line(line):
@@ -189,15 +91,17 @@ class FontTermiusModifier(lang.TermiusModifier):
                 try:
                     old_val, new_val = lang.parse_replace_rule(line)
                     if lang.is_regex_pattern(old_val):
-                        self.compiled_rules.append(("regex", line, re.compile(old_val[1:-1]), new_val))
+                        font_rules.append(("regex", line, re.compile(old_val[1:-1]), new_val))
                     else:
-                        self.compiled_rules.append(("plain", line, old_val, new_val))
+                        font_rules.append(("plain", line, old_val, new_val))
                 except ValueError as e:
                     logging.warning(f"Skipping invalid font rule: {line} - {str(e)}")
                 except re.error as e:
                     logging.warning(f"Regex compilation error in font rule: {line} - {str(e)}")
         except Exception as e:
             logging.error(f"Failed to load font rules: {e}")
+            return
+        self.compiled_rules = font_rules + self.compiled_rules
 
     def apply_fonts(self):
         """注入自定义字体：复制字体文件到 ui-process/assets 并在主 CSS 追加 @font-face
@@ -221,6 +125,8 @@ class FontTermiusModifier(lang.TermiusModifier):
             logging.info(f"Copied font: {fname}")
             copied += 1
         logging.info(f"Font files copied: {copied}")
+        if copied == 0:
+            logging.warning("No font files found in fonts/; the font build would have no custom fonts")
 
         # 2. 复制字体许可文件（OFL 要求随字体一起分发）
         for fname in ("OFL-1.1.txt", "NOTICE.md"):

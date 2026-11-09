@@ -47,7 +47,7 @@ python fontlang.py --localize
 # 仅激活试用功能
 python lang.py --trial
 
-# 还原到初始状态（需要 asar CLI）
+# 还原到初始状态（不需要 asar CLI；仅当备份过期被拒绝时加 --force）
 python lang.py --restore
 
 # 仅还原 app.asar（不依赖 asar CLI，适合 asar 未安装时回滚）
@@ -61,6 +61,12 @@ python tools/status.py
 
 # 打补丁后自检（asar 可读/版本一致/字体与许可已打包/CSS 标记存在）
 python tools/verify_asar.py
+
+# 非字体包自检时跳过字体/CSS 检查
+python tools/verify_asar.py --no-fonts
+
+# 发布前校验生成的 asar（不需要安装 Termius；字体包加 --fonts）
+python tools/verify_build.py app-linux-localize-font.asar --fonts
 
 # 搜索特定字符串
 python lang.py --find "term1" "term2"
@@ -111,7 +117,9 @@ tools/
 ├── report_rules.py # 打补丁前只读体检（不修改 Termius）
 ├── status.py       # 当前安装/补丁/备份/字体状态
 ├── verify_asar.py  # 打补丁后自检（版本/字体/许可/CSS）
+├── verify_build.py # 发布前校验生成的 asar（可读/字体/许可/CSS）
 └── restore.py      # 仅还原 app.asar（不依赖 asar CLI）
+backup_guard.py     # 备份哈希/版本校验与安全还原（混入 lang.py）
 tests/              # pytest 测试
 extract/
 ├── app.asar.unpack      # 解包出的所有文件
@@ -167,6 +175,7 @@ extract/
   - **Value**: `l`
   - 默认只发布 `app-*-localize-font.asar`（汉化+自定义字体）；如需其他变体可将值改为 `lt`（加试用）、`lk`（加跳过登录）或多组逗号分隔如 `l,lk,lt`（l=汉化，t=试用，k=跳过登录，所有产物均自动带字体）。
   - **注意**：本仓库的字体版发布由 `release-font.yml` 手动触发（Actions → Release Font Platforms → Run workflow）；若启用了上游的 `Release Platforms` / `Release Beta Platforms` workflow，它们会构建不含字体的版本并占用相同版本号，请在仓库的 **Actions** 页面将其禁用，只保留 `Release Font Platforms`。
+  - **发布为公开版本**：`Release Font Platforms` 默认只创建草稿 Release，需要在 Releases 页面手动点击 <kbd>Publish release</kbd>；运行 workflow 时勾选 `publish` 可直接发布。历史草稿不发布就不会出现在 `releases/latest` 和匿名下载中。
 
 ## 🧪 开发与测试
 
@@ -317,13 +326,14 @@ make restore  # 还原 app.asar
 
 - `README.md` 由本 fork 维护；`sync-upstream.yml` 合并上游时若 README 冲突，会保留本仓库版本；`.gitignore` 冲突会合并双方条目；其它文件冲突则直接失败并中止合并。
 - `installer/` 是上游原样文件，脚本内的仓库地址指向上游，安装的是不含字体的版本。
-- `lang.py` 有一处 fork 小改动：`tkinter` 改为在 `select_directory()` 内按需导入，便于无 GUI 环境使用 report/restore；上游若改到这段，同步会以冲突形式提示。
+- `lang.py` 只保留少量 fork 挂钩：`tkinter` 改为在 `select_directory()` 内按需导入，且混入 `backup_guard.py` 的备份安全检查；上游若改到这些位置，同步会以冲突形式提示。
 - 规则修改后请运行 `python tools/lint_rules.py rules && python -m pytest -q`，CI 也会在 push/PR 时执行。
+- 发布 workflow 在构建前执行 lint + pytest；每个产物生成后用 `tools/verify_build.py` 校验可读性，字体包还会校验字体/许可/CSS 标记。
 - Termius 升级后，先运行 `python tools/report_rules.py` 做只读体检（不修改 Termius），再决定是否打补丁；补丁后未命中的规则也会写到 `extract/unmatched-rules.txt`。
 - 不确定当前是否已打补丁时，先运行 `python tools/status.py`；`--json` 可输出机器可读结果。
 - 打补丁后运行 `python tools/verify_asar.py`；`--strict` 会把备份缺失、CSS 标记缺失等 warning 也视为失败。
-- Termius 自动更新后，脚本会优先比较 `app.asar` 与备份内 `package.json` 的版本号：版本不同会自动刷新备份，旧备份保留为 `app.asar.bak.old`。读不到版本时才退回 `app.asar.bak.json` 的 hash/元数据判断。
-- `app.asar.bak.json` 只由 `fontlang.py` 维护；如果交替使用 `lang.py` 和 `fontlang.py`，切换前先运行 `python tools/restore.py`，避免元数据与实际产物不一致。
+- 打补丁前会校验 `app.asar.bak` 与当前 `app.asar` 的版本/hash；疑似过期时会中止，避免 Termius 自动更新后又被旧备份覆盖回旧版本。只有明确知道要用旧备份时才使用 `--force`。
+- `app.asar.bak.json` 由 `lang.py` 和 `fontlang.py` 共同维护，记录备份/补丁产物 hash、版本以及 fuse 原始字节。还原时会先恢复 `app.asar`，macOS 上重新运行 `osxfix.sh` 更新 hash，Windows/Linux 上再恢复 Electron fuse；fuse 恢复失败会保留元数据供重试。
 
 ## 🔔 注意事项
 
@@ -342,9 +352,9 @@ make restore  # 还原 app.asar
 [termius]: https://termius.com
 [consideration]: https://ideas.termius.com/tabs/1-under-consideration
 [localization]: https://ideas.termius.com/c/82-chinese-localization
-[releases]: https://github.com/ArcSurge/Termius-Pro-zh_CN/releases
-[fork]: https://github.com/ArcSurge/Termius-Pro-zh_CN/fork
-[secrets]: https://github.com/ArcSurge/Termius-Pro-zh_CN/settings/secrets/actions
-[variables]: https://github.com/ArcSurge/Termius-Pro-zh_CN/settings/variables/actions
-[actions]: https://github.com/ArcSurge/Termius-Pro-zh_CN/actions
-[localize-android]: https://github.com/ArcSurge/Termius-Pro-zh_CN/actions/workflows/localize-android.yml
+[releases]: https://github.com/holtwood-forks/Termius-Pro-zh_CN/releases
+[fork]: https://github.com/holtwood-forks/Termius-Pro-zh_CN/fork
+[secrets]: https://github.com/holtwood-forks/Termius-Pro-zh_CN/settings/secrets/actions
+[variables]: https://github.com/holtwood-forks/Termius-Pro-zh_CN/settings/variables/actions
+[actions]: https://github.com/holtwood-forks/Termius-Pro-zh_CN/actions
+[localize-android]: https://github.com/holtwood-forks/Termius-Pro-zh_CN/actions/workflows/localize-android.yml

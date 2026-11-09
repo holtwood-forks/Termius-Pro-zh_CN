@@ -36,20 +36,22 @@ def asar_listing(asar_path):
 def read_report(report_path, unmatched_path):
     report = {}
     try:
-        for line in open(report_path, "r", encoding="utf-8"):
-            line = line.rstrip("\n")
-            if line.startswith("# Termius version: "):
-                report["version"] = line.split(": ", 1)[1]
-            elif line.startswith("# rules: "):
-                matched, total = line.split(": ", 1)[1].split(" ", 1)[0].split("/")
-                report["matched"] = int(matched)
-                report["total"] = int(total)
-            elif line.startswith("# read errors: "):
-                report["read_errors"] = int(line.split(": ", 1)[1])
+        with open(report_path, "r", encoding="utf-8") as file:
+            for line in file:
+                line = line.rstrip("\n")
+                if line.startswith("# Termius version: "):
+                    report["version"] = line.split(": ", 1)[1]
+                elif line.startswith("# rules: "):
+                    matched, total = line.split(": ", 1)[1].split(" ", 1)[0].split("/")
+                    report["matched"] = int(matched)
+                    report["total"] = int(total)
+                elif line.startswith("# read errors: "):
+                    report["read_errors"] = int(line.split(": ", 1)[1])
     except (OSError, ValueError):
         pass
     try:
-        first = open(unmatched_path, "r", encoding="utf-8").readline().strip()
+        with open(unmatched_path, "r", encoding="utf-8") as file:
+            first = file.readline().strip()
         if first.startswith("# unmatched rules: "):
             report["unmatched"] = int(first.split(": ", 1)[1].split("/", 1)[0])
     except (OSError, ValueError):

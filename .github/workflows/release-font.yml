@@ -9,20 +9,26 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: 'Publish the release immediately instead of saving a draft'
+        required: false
+        type: boolean
+        default: false
 
 # 发布 Release 需要 GITHUB_TOKEN 具备写权限（新仓库默认只读，必须显式声明）
 permissions:
   contents: write
 
-# 同一时刻只允许一个发布流程，避免多次手动触发并发写同一份草稿 Release
+# 同一时刻只允许一个发布流程，避免正式版/字体版/Beta 并发写同一份 Release
 concurrency:
-  group: release-font
+  group: termius-release
   cancel-in-progress: false
 
 jobs:
   release:
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - platform: ubuntu
@@ -116,3 +122,4 @@ jobs:
       install_command: ${{ matrix.install_command }}
       source_path: ${{ matrix.source_path }}
       force_release: ${{ github.event.inputs.force_release == 'true' }}
+      publish: ${{ github.event.inputs.publish == 'true' }}

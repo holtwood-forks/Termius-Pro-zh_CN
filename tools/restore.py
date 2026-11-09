@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Restore Termius app.asar from app.asar.bak without the asar CLI.
 
-`python lang.py --restore` runs check_asar_installed() before dispatch, so a
-missing @electron/asar blocks a rollback. This entry point only copies files.
+Both this entry point and `python lang.py --restore` work without
+@electron/asar. This tool additionally accepts --path and skips importing the
+font layer. It refuses to overwrite a newer app.asar with a stale backup unless
+--force is given, and restores the Electron fuse byte recorded during patching.
 """
 import argparse
 import logging
@@ -21,6 +23,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Restore Termius app.asar from app.asar.bak.")
     parser.add_argument("-b", "--beta", action="store_true", help="Operate on Termius Beta.")
     parser.add_argument("-p", "--path", help="Termius resources directory (contains app.asar).")
+    parser.add_argument("--force", action="store_true",
+                        help="Restore even if the backup looks stale (use with care).")
     parser.add_argument("-v", "--verbose", type=lambda s: s.upper(), dest="log_level",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], default="INFO")
     args = parser.parse_args(argv)
@@ -34,10 +38,8 @@ def main(argv=None):
     else:
         termius_path = lang.get_termius_path(args.beta)
 
-    lang.TermiusModifier(termius_path, args).restore_changes()
-    meta_path = os.path.join(termius_path, "app.asar.bak.json")
-    if os.path.exists(meta_path):
-        os.remove(meta_path)
+    if not lang.TermiusModifier(termius_path, args).restore_changes(force=args.force):
+        return 1
     return 0
 
 

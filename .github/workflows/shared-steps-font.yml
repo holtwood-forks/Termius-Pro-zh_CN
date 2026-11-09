@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: "Publish the release immediately instead of saving a draft"
+        required: false
+        type: boolean
+        default: false
 
 # 发布 Release 需要 GITHUB_TOKEN 具备写权限（新仓库默认只读，必须显式声明）
 permissions:
@@ -56,18 +61,26 @@ jobs:
             exit 1
           fi
           echo "✓ Version validation passed: $TERMIUS_VERSION"
-      - name: Fetch latest GitHub release version
+      - name: Fetch latest published release version
         if: ${{ !inputs.force_release }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          release_url="https://api.github.com/repos/${{ github.repository }}/releases/latest"
-          response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$release_url")
+          release_url="https://api.github.com/repos/${{ github.repository }}/releases?per_page=100"
+          response=$(curl -s -f -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$release_url")
           echo "::debug::GitHub API response: $(jq -c . <<< "$response")"
-          github_version=$(echo "$response" | jq -r '.tag_name // "0.0.0"' | sed 's/^v//')
-          echo "✓ Latest GitHub release: v$github_version"
+          # releases/latest 会忽略草稿；这里显式取“已发布且非预发布”的最高版本，
+          # 否则仓库里全是草稿时会一直回退到 0.0.0，每次定时任务都重复构建。
+          github_version=$(echo "$response" \
+            | jq -r '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            | sed 's/^v//' \
+            | grep -E '^[0-9]' \
+            | sort -V \
+            | tail -n1)
+          github_version=${github_version:-0.0.0}
+          echo "✓ Latest published release: v$github_version"
           echo "GITHUB_VERSION=$github_version" >> $GITHUB_ENV
       - name: Compare version metadata
         id: compare_versions
@@ -96,6 +109,7 @@ jobs:
         if: steps.compare_versions.outputs.should_continue == 'true'
         run: |
           python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
       - name: Install Termius application package
         if: steps.compare_versions.outputs.should_continue == 'true'
         run: |
@@ -111,6 +125,10 @@ jobs:
         if: steps.compare_versions.outputs.should_continue == 'true'
         shell: bash
         run: python tools/lint_rules.py rules
+      - name: Run tests
+        if: steps.compare_versions.outputs.should_continue == 'true'
+        shell: bash
+        run: python -m pytest -q
       - name: Generate localization + font assets
         if: steps.compare_versions.outputs.should_continue == 'true'
         shell: bash
@@ -146,12 +164,13 @@ jobs:
             done
             # fontlang.py 在 fonts/ 目录存在时自动注入字体，无需额外参数；文件名追加 -font 标识
             features="${features:+$features-}font"
+            if [ -z "$args" ]; then
+              echo "::error::Invalid release spec '$release' in RELEASE_LIST" >&2
+              exit 1
+            fi
             file="${prefix}-${features}.asar"
             python fontlang.py -"$args" && cp "${{ inputs.source_path }}" "$temp_dir/$file" || exit 1
-            asar_list=$(asar list "$temp_dir/$file") \
-              || { echo "::error::Cannot list $file"; exit 1; }
-            printf '%s\n' "$asar_list" | grep -q "OFL-1.1.txt" \
-              || { echo "::error::Font license not packaged in $file"; exit 1; }
+            python tools/verify_build.py "$temp_dir/$file" --fonts || exit 1
             echo "✓ $file"
           done
           cd "$temp_dir"
@@ -185,7 +204,7 @@ jobs:
           allowUpdates: true
           tag: v${{ env.TERMIUS_VERSION }}
           body: ${{ steps.prepare_release_notes.outputs.updated_release_notes }}
-          draft: true
+          draft: ${{ !inputs.publish }}
           prerelease: false
           artifacts: ${{ env.TEMP_DIR }}/*.asar,${{ env.TEMP_DIR }}/SHA256SUMS-*.txt
           token: ${{ secrets.GITHUB_TOKEN }}

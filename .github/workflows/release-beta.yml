@@ -10,11 +10,25 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: 'Publish the release immediately instead of saving a draft'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# 所有发布 workflow 共用同一个并发组，避免正式版/字体版/Beta 同时写 Release
+concurrency:
+  group: termius-release
+  cancel-in-progress: false
 
 jobs:
   release:
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - platform: ubuntu
@@ -108,3 +122,4 @@ jobs:
       install_command: ${{ matrix.install_command }}
       source_path: ${{ matrix.source_path }}
       force_release: ${{ github.event.inputs.force_release == 'true' }}
+      publish: ${{ github.event.inputs.publish == 'true' }}
