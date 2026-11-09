@@ -39,13 +39,15 @@ def asar_listing(asar_path):
 def asar_extract_file(asar_path, inner_path):
     # subprocess 的 cwd 会切到临时目录；相对 asar 路径必须先转成绝对路径。
     asar_path = os.path.abspath(asar_path)
+    # @electron/asar 在 Windows 上要求内部路径使用反斜杠，list 输出则是正斜杠。
+    extract_path = inner_path.replace("/", os.sep)
+    basename = os.path.basename(extract_path)
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             subprocess.run(
-                [lang.get_asar_cmd(), "extract-file", asar_path, inner_path],
+                [lang.get_asar_cmd(), "extract-file", asar_path, extract_path],
                 cwd=temp_dir, check=True, capture_output=True, text=True,
             )
-            basename = os.path.basename(inner_path)
             for root, _, files in os.walk(temp_dir):
                 if basename in files:
                     with open(os.path.join(root, basename), "r", encoding="utf-8") as file:
