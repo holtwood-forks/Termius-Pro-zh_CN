@@ -179,3 +179,16 @@ def test_verify_fonts_dir_without_font_files(tmp_path):
     result = verify(str(tmp_path), modifier, listing, fonts_dir=str(fonts))
 
     assert statuses(result)["fonts_packed"] == "fail"
+
+
+def test_verify_css_extract_failure(tmp_path):
+    modifier, listing, fonts = make_fixture(tmp_path)
+
+    result = verify(
+        str(tmp_path), modifier, listing, fonts_dir=str(fonts),
+        css_reader=lambda asar, path: None,
+    )
+
+    assert statuses(result)["css_marker"] == "fail"
+    detail = next(item["detail"] for item in result["checks"] if item["name"] == "css_marker")
+    assert "cannot extract" in detail

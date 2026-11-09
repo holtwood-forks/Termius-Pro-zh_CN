@@ -37,6 +37,8 @@ def asar_list(asar_path):
 
 
 def extract_file(asar_path, inner_path):
+    # subprocess 的 cwd 会切到临时目录；相对 asar 路径必须先转成绝对路径。
+    asar_path = os.path.abspath(asar_path)
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             subprocess.run(
@@ -117,17 +119,21 @@ def verify(asar_path, listing=None, require_fonts=False, css_reader=None):
         checks.append({"name": "css_marker", "status": "fail", "detail": "main-*.css not found"})
         return checks
     reader = css_reader or extract_file
+    unreadable = []
     for path in paths:
         content = reader(asar_path, path)
-        if content is not None and CSS_MARKER in content:
+        if content is None:
+            unreadable.append(path)
+            continue
+        if CSS_MARKER in content:
             checks.append({"name": "css_marker", "status": "ok", "detail": path})
             break
     else:
-        checks.append({
-            "name": "css_marker",
-            "status": "fail",
-            "detail": "marker missing in: " + ", ".join(paths),
-        })
+        if unreadable:
+            detail = "cannot extract: " + ", ".join(unreadable)
+        else:
+            detail = "marker missing in: " + ", ".join(paths)
+        checks.append({"name": "css_marker", "status": "fail", "detail": detail})
     return checks
 
 

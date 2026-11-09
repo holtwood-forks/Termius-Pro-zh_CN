@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import tools.verify_build as verify_build
 
 
@@ -80,3 +83,31 @@ def test_verify_build_rejects_missing_font_directory(monkeypatch):
     )
 
     assert statuses(checks)["fonts_packed"] == "fail"
+
+
+def test_extract_file_uses_absolute_asar_path(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        captured["cmd"] = cmd
+        Path(cwd, "main-test.css").write_text("body{}", encoding="utf-8")
+
+    monkeypatch.setattr(verify_build.subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    Path("app.asar").write_text("x", encoding="utf-8")
+
+    content = verify_build.extract_file("./app.asar", "ui-process/assets/main-test.css")
+
+    assert content == "body{}"
+    assert os.path.isabs(captured["cmd"][2])
+
+
+def test_verify_build_reports_unreadable_css():
+    checks = verify_build.verify(
+        "app.asar", listing=font_listing(), require_fonts=True,
+        css_reader=lambda asar, path: None,
+    )
+
+    assert statuses(checks)["css_marker"] == "fail"
+    detail = next(item["detail"] for item in checks if item["name"] == "css_marker")
+    assert "cannot extract" in detail

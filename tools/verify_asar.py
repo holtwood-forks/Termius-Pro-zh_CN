@@ -37,6 +37,8 @@ def asar_listing(asar_path):
 
 
 def asar_extract_file(asar_path, inner_path):
+    # subprocess 的 cwd 会切到临时目录；相对 asar 路径必须先转成绝对路径。
+    asar_path = os.path.abspath(asar_path)
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             subprocess.run(
@@ -146,13 +148,22 @@ def verify(termius_path, modifier, listing, fonts_dir=None, css_reader=None, rep
             # 不同版本的资源哈希不同，main-*.css 可能不止一个；任意一个带标记即可。
             marker = "CodeNewRoman Nerd Font Mono"
             matched = None
+            unreadable = []
             for css_path in css_lines:
                 content = css_reader(asar_path, css_path)
-                if content and marker in content:
+                if content is None:
+                    unreadable.append(css_path)
+                    continue
+                if marker in content:
                     matched = css_path
                     break
             if matched:
                 checks.append(check("css_marker", "ok", matched))
+            elif unreadable:
+                checks.append(check(
+                    "css_marker", "fail",
+                    "cannot extract: " + ", ".join(unreadable),
+                ))
             else:
                 checks.append(check(
                     "css_marker", "fail",
